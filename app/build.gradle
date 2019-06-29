@@ -1,0 +1,218 @@
+apply plugin: "com.android.application"
+apply plugin: 'com.google.protobuf'
+configurations { natives }
+
+android {
+    buildToolsVersion "28.0.3"
+    compileSdkVersion 27
+    defaultConfig {
+        applicationId "ir.markazandroid.unimakeup"
+        minSdkVersion 21
+        targetSdkVersion 27
+        versionCode 1
+        versionName "1.0"
+
+        ndk {
+            abiFilters 'armeabi-v7a' , 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            // set c++ flags, specify the STL: c++_shared, gnustl...
+            cmake {
+                cFlags   "-O3"
+                cppFlags "-std=c++11 -frtti -fexceptions"
+                arguments "-DANDROID_PLATFORM=android-16",  // remember: same min sdk as before
+                        "-DANDROID_TOOLCHAIN=clang",
+                        "-DANDROID_STL=c++_shared",
+                        "-DCMAKE_BUILD_TYPE=Release",
+                        "-DANDROID_ARM_NEON=TRUE",
+                        "-DANDROID_ARM_MODE=arm",
+                        "-DANDROID_CPP_FEATURES=rtti exceptions"
+            }
+        }
+    }
+
+    sourceSets {
+        // tell to CMake where to find the native pre-build libraries:
+        main {
+            jniLibs.srcDirs = [
+                    "src/main/cppLibs/dlib/lib",   // remove if you only need opencv
+                    "src/main/cppLibs/opencv",  // remove if you only need dlib
+                    "src/main/cppLibs/libgdx",
+            ]
+        }
+
+        main.java.srcDirs += "${protobuf.generatedFilesBaseDir}/main/javalite"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+        }
+    }
+
+    packagingOptions {
+        pickFirst "**/libc++_shared.so"
+    }
+    compileOptions {
+        sourceCompatibility = '1.8'
+        targetCompatibility = '1.8'
+    }
+}
+
+dependencies {
+    //compile project(":core")
+    implementation "com.badlogicgames.gdx:gdx-backend-android:$gdxVersion"
+    //natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi"
+    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a"
+    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a"
+    //natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86"
+    //natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86_64"
+    implementation "com.badlogicgames.gdx:gdx:$gdxVersion"
+    implementation "net.dermetfan.libgdx-utils:libgdx-utils:0.13.3"
+    implementation project(path: ':opencv4')
+
+    implementation "com.google.protobuf:protobuf-lite:3.0.1"
+
+    implementation group: 'commons-io', name: 'commons-io', version: '2.6'
+
+    implementation "com.quickbirdstudios:yuvtomat:1.1.0"
+
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.3.21"
+}
+
+protobuf {
+    protoc {
+        // You still need protoc like in the non-Android case
+        artifact = "com.google.protobuf:protoc:3.7.1"
+    }
+    plugins {
+        javalite {
+            // The codegen for lite comes as a separate artifact
+            artifact = "com.google.protobuf:protoc-gen-javalite:3.0.0"
+        }
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.builtins {
+                // In most cases you don't need the full Java output
+                // if you use the lite output.
+                remove java
+            }
+            task.plugins {
+                javalite { }
+            }
+        }
+    }
+}
+
+
+// called every time gradle gets executed, takes the native dependencies of
+// the natives configuration, and extracts them to the proper libs/ folders
+// so they get packed with the APK.
+task copyAndroidNatives() { 
+    file("libs/armeabi/").mkdirs();
+    file("libs/armeabi-v7a/").mkdirs();
+    file("libs/arm64-v8a/").mkdirs();
+    file("libs/x86_64/").mkdirs();
+    file("libs/x86/").mkdirs();
+
+    configurations.natives.files.each { jar ->
+        def outputDir = null
+        if(jar.name.endsWith("natives-arm64-v8a.jar")) outputDir = file("libs/arm64-v8a")
+        if(jar.name.endsWith("natives-armeabi-v7a.jar")) outputDir = file("libs/armeabi-v7a")        
+        if(jar.name.endsWith("natives-armeabi.jar")) outputDir = file("libs/armeabi")
+        if(jar.name.endsWith("natives-x86_64.jar")) outputDir = file("libs/x86_64")
+        if(jar.name.endsWith("natives-x86.jar")) outputDir = file("libs/x86")
+        if(outputDir != null) {
+            copy {
+                from zipTree(jar)
+                into outputDir
+                include "*.so"
+            }
+        }
+    }
+}
+
+task run(type: Exec) {
+    def path
+    def localProperties = project.file("../local.properties")
+    if (localProperties.exists()) {
+        Properties properties = new Properties()
+        localProperties.withInputStream { instr ->
+            properties.load(instr)
+        }
+        def sdkDir = properties.getProperty('sdk.dir')
+        if (sdkDir) {
+            path = sdkDir
+        } else {
+            path = "$System.env.ANDROID_HOME"
+        }
+    } else {
+        path = "$System.env.ANDROID_HOME"
+    }
+
+    def adb = path + "/platform-tools/adb"
+    commandLine "$adb", 'shell', 'am', 'start', '-n', 'ir.markazandroid.unimakeup/ir.markazandroid.unimakeup.AndroidLauncher'
+}
+
+// sets up the Android Eclipse project, using the old Ant based build.
+eclipse {
+    // need to specify Java source sets explicitly, SpringSource Gradle Eclipse plugin
+    // ignores any nodes added in classpath.file.withXml
+    sourceSets {
+        main {
+            java.srcDirs "src", 'gen'
+        }
+    }
+
+    jdt {
+        sourceCompatibility = 1.6
+        targetCompatibility = 1.6
+    }
+
+    classpath {
+        plusConfigurations += [ project.configurations.compile ]        
+        containers 'com.android.ide.eclipse.adt.ANDROID_FRAMEWORK', 'com.android.ide.eclipse.adt.LIBRARIES'       
+    }
+
+    project {
+        name = appName + "-android"
+        natures 'com.android.ide.eclipse.adt.AndroidNature'
+        buildCommands.clear();
+        buildCommand "com.android.ide.eclipse.adt.ResourceManagerBuilder"
+        buildCommand "com.android.ide.eclipse.adt.PreCompilerBuilder"
+        buildCommand "org.eclipse.jdt.core.javabuilder"
+        buildCommand "com.android.ide.eclipse.adt.ApkBuilder"
+    }
+}
+
+// sets up the Android Idea project, using the old Ant based build.
+idea {
+    module {
+        sourceDirs += file("src");
+        scopes = [ COMPILE: [plus:[project.configurations.compile]]]        
+
+        iml {
+            withXml {
+                def node = it.asNode()
+                def builder = NodeBuilder.newInstance();
+                builder.current = node;
+                builder.component(name: "FacetManager") {
+                    facet(type: "android", name: "Android") {
+                        configuration {
+                            option(name: "UPDATE_PROPERTY_FILES", value:"true")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
